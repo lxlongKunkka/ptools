@@ -1,4 +1,4 @@
-name: 部署（tar 打包传输）
+name: 极简部署
 on:
   push:
     branches: [ main ]
@@ -10,63 +10,32 @@ jobs:
       - name: 拉取代码
         uses: actions/checkout@v4
 
-      - name: 安装 Node.js 20.19.0
-        uses: actions/setup-node@v4
-        with:
-          node-version: 20.19.0
-          cache: 'npm'
-
-      - name: 构建前端并打包
+      - name: 构建前端 + 准备环境
         run: |
-          # 构建前端
-          cd frontend
-          npm install
-          npm run build
-          # 回到根目录，打包前端 dist 目录
-          cd ..
-          tar -czf frontend.tar.gz -C frontend/dist .  # 只打包 dist 内的内容
+          # 安装 Node 并构建前端
+          curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
+          sudo apt-get install -y nodejs
+          cd frontend && npm install && npm run build && cd ..
+          
+          # 配置 SSH（免密登录服务器）
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SERVER_SSH_KEY }}" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          ssh-keyscan -p ${{ secrets.SERVER_PORT }} ${{ secrets.SERVER_HOST }} >> ~/.ssh/known_hosts
 
-      - name: 打包后端文件
+      - name: 传输文件并启动服务
         run: |
-          # 打包后端目录内的所有文件
-          tar -czf backend.tar.gz -C backend .  # -C 进入 backend 目录再打包
-
-      - name: 传输并解压文件到服务器
-        uses: appleboy/ssh-action@master
-        with:
-          host: ${{ secrets.SERVER_HOST }}
-          port: ${{ secrets.SERVER_PORT }}
-          username: ${{ secrets.SERVER_USER }}
-          key: ${{ secrets.SERVER_SSH_KEY }}
-          script: |
-            PROJECT_DIR="/var/www/programming-tools"
-            # 清理旧目录
-            rm -rf $PROJECT_DIR/frontend $PROJECT_DIR/backend
-            mkdir -p $PROJECT_DIR/frontend $PROJECT_DIR/backend
-            
-            # 从 GitHub Actions 下载打包好的文件（关键：用 scp 传输 tar 包）
-            scp -P ${{ secrets.SERVER_PORT }} runner@${{ secrets.SERVER_HOST }}:/github/workspace/frontend.tar.gz $PROJECT_DIR/frontend/
-            scp -P ${{ secrets.SERVER_PORT }} runner@${{ secrets.SERVER_HOST }}:/github/workspace/backend.tar.gz $PROJECT_DIR/backend/
-            
-            # 解压前端文件
-            cd $PROJECT_DIR/frontend
-            tar -xzf frontend.tar.gz
-            rm frontend.tar.gz  # 清理压缩包
-            
-            # 解压后端文件
-            cd $PROJECT_DIR/backend
-            tar -xzf backend.tar.gz
-            rm backend.tar.gz  # 清理压缩包
-            
-            # 验证文件是否存在
-            echo "=== 前端目录内容 ==="
-            ls -la $PROJECT_DIR/frontend
-            echo "=== 后端目录内容 ==="
-            ls -la $PROJECT_DIR/backend
-            
-            # 启动服务
-            cd $PROJECT_DIR/backend
+          # 传输前端 dist 到服务器 frontend 目录
+          scp -P ${{ secrets.SERVER_PORT }} -r frontend/dist/* ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }}:/var/www/programming-tools/frontend/
+          
+          # 传输后端文件到服务器 backend 目录
+          scp -P ${{ secrets.SERVER_PORT }} -r backend/* ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }}:/var/www/programming-tools/backend/
+          
+          # 通过 SSH 登录服务器并启动服务
+          ssh -p ${{ secrets.SERVER_PORT }} ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }} << 'EOF'
+            cd /var/www/programming-tools/backend
             npm install
             npm install -g pm2 || true
             pm2 restart app.js || pm2 start app.js
             sudo systemctl restart caddy
+          EOF
