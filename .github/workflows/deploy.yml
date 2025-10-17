@@ -1,4 +1,4 @@
-name: 部署（绝对路径+彻底清理）
+name: 部署（用 rsync 精准传输）
 on:
   push:
     branches: [ main ]
@@ -26,32 +26,8 @@ jobs:
             exit 1
           fi
 
-      # 前端传输：用绝对路径 working_dir，确保进入 dist 目录
-      - name: 传输前端文件
-        uses: appleboy/scp-action@master
-        with:
-          host: ${{ secrets.SERVER_HOST }}
-          port: ${{ secrets.SERVER_PORT }}
-          username: ${{ secrets.SERVER_USER }}
-          key: ${{ secrets.SERVER_SSH_KEY }}
-          source: "."  # 当前目录（即 dist 内的文件）
-          target: "/var/www/programming-tools/frontend"
-          working_dir: "/github/workspace/frontend/dist"  # 绝对路径，不报错
-
-      # 后端传输：同样用绝对路径 working_dir
-      - name: 传输后端文件
-        uses: appleboy/scp-action@master
-        with:
-          host: ${{ secrets.SERVER_HOST }}
-          port: ${{ secrets.SERVER_PORT }}
-          username: ${{ secrets.SERVER_USER }}
-          key: ${{ secrets.SERVER_SSH_KEY }}
-          source: "."  # 当前目录（即 backend 内的文件）
-          target: "/var/www/programming-tools/backend"
-          working_dir: "/github/workspace/backend"  # 绝对路径
-
-      # 验证：确保无嵌套
-      - name: 验证目录结构
+      # 关键：用 rsync 传输，只传指定文件，排除仓库根目录
+      - name: 部署到服务器（rsync 精准传输）
         uses: appleboy/ssh-action@master
         with:
           host: ${{ secrets.SERVER_HOST }}
@@ -59,21 +35,28 @@ jobs:
           username: ${{ secrets.SERVER_USER }}
           key: ${{ secrets.SERVER_SSH_KEY }}
           script: |
-            echo "=== 前端目录（不应有 frontend/backend） ==="
-            ls -la /var/www/programming-tools/frontend
-            echo "=== 后端目录（不应有 frontend/backend） ==="
-            ls -la /var/www/programming-tools/backend
-
-      # 启动服务
-      - name: 启动服务
-        uses: appleboy/ssh-action@master
-        with:
-          host: ${{ secrets.SERVER_HOST }}
-          port: ${{ secrets.SERVER_PORT }}
-          username: ${{ secrets.SERVER_USER }}
-          key: ${{ secrets.SERVER_SSH_KEY }}
-          script: |
-            cd /var/www/programming-tools/backend
+            # 服务器目标目录
+            PROJECT_DIR="/var/www/programming-tools"
+            
+            # 彻底清理旧目录（连目录本身一起删）
+            rm -rf $PROJECT_DIR/frontend $PROJECT_DIR/backend
+            mkdir -p $PROJECT_DIR/frontend $PROJECT_DIR/backend
+            
+            # 从 GitHub Actions 环境同步文件到服务器（通过 rsync）
+            # 1. 同步前端 dist 内容到服务器 frontend 目录
+            rsync -avz --delete /github/workspace/frontend/dist/ $PROJECT_DIR/frontend/
+            
+            # 2. 同步后端内容到服务器 backend 目录
+            rsync -avz --delete /github/workspace/backend/ $PROJECT_DIR/backend/
+            
+            # 验证传输结果
+            echo "=== 前端目录内容 ==="
+            ls -la $PROJECT_DIR/frontend
+            echo "=== 后端目录内容 ==="
+            ls -la $PROJECT_DIR/backend
+            
+            # 启动服务
+            cd $PROJECT_DIR/backend
             npm install
             npm install -g pm2 || true
             pm2 restart app.js || pm2 start app.js
