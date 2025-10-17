@@ -1,47 +1,72 @@
-name: 测试服务器部署链路
+name: 完整部署（基于本地成功构建逻辑）
 on:
   push:
-    branches: [ main ]  # 推送 main 分支时触发
+    branches: [ main ]
 
 jobs:
-  test-deploy:
+  deploy:
     runs-on: ubuntu-latest
-    
     steps:
-      # 仅拉取代码（无需构建，跳过前端/后端处理）
+      # 1. 拉取代码（确保拿到最新的 frontend 代码）
       - name: 拉取仓库代码
         uses: actions/checkout@v4
 
-      # 核心步骤：通过 SSH 连接服务器并执行简单命令
-      - name: 测试服务器连接与基础操作
+      # 2. 安装 Node.js（和你本地 Codespace 版本尽量一致，避免版本差异）
+      - name: 安装 Node.js 20.19.0
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20.19.0  # 匹配你 package.json 要求的版本
+          cache: 'npm'           # 缓存依赖，和本地一样快
+
+      # 3. 前端构建（完全复刻你本地的操作，不额外加复杂命令）
+      - name: 构建前端（复刻本地成功逻辑）
+        run: |
+          cd frontend
+          # 先看当前目录内容，确认 package.json 存在（排查路径问题）
+          ls -la
+          # 安装依赖（和本地一样用默认命令，不加多余参数）
+          npm install
+          # 执行构建（和你本地敲的命令完全一致）
+          npm run build
+          # 构建后查看 dist 是否存在（输出日志，方便排查）
+          echo "构建后 frontend 目录内容："
+          ls -la
+          echo "dist 目录内容："
+          ls -la dist
+
+      # 4. 后端仅复制文件（暂不处理依赖，先确保文件能传过去）
+      - name: 确认后端目录
+        run: |
+          cd backend
+          ls -la  # 确认 app.js 存在，输出日志
+
+      # 5. 部署到服务器（和之前测试成功的 SSH 逻辑一致）
+      - name: 部署到服务器
         uses: appleboy/ssh-action@master
         with:
           host: ${{ secrets.SERVER_HOST }}
           port: ${{ secrets.SERVER_PORT }}
           username: ${{ secrets.SERVER_USER }}
           key: ${{ secrets.SERVER_SSH_KEY }}
-          timeout: 30s
-          
-          # 执行的测试命令（简单且可验证）
+          timeout: 60s
           script: |
-            # 1. 打印服务器信息（验证连接成功）
-            echo "✅ 成功连接服务器：$(hostname)"
-            echo "当前服务器时间：$(date)"
+            PROJECT_DIR="/var/www/programming-tools"
+            # 创建目录（确保服务器有这个文件夹）
+            mkdir -p $PROJECT_DIR/frontend $PROJECT_DIR/backend
             
-            # 2. 创建测试目录和文件（验证读写权限）
-            TEST_DIR="/var/www/test-deploy"
-            mkdir -p $TEST_DIR
-            echo "这是来自 GitHub Actions 的测试文件" > $TEST_DIR/test.txt
+            # 复制前端 dist（从 GitHub Actions 工作目录复制，和本地路径对应）
+            cp -r /github/workspace/frontend/dist $PROJECT_DIR/frontend/
+            # 复制后端文件
+            cp -r /github/workspace/backend/* $PROJECT_DIR/backend/
             
-            # 3. 验证文件是否创建成功
-            if [ -f "$TEST_DIR/test.txt" ]; then
-              echo "✅ 测试文件创建成功，内容："
-              cat $TEST_DIR/test.txt
-            else
-              echo "❌ 测试文件创建失败"
-              exit 1
+            # 简单验证：查看服务器上的 dist 是否存在
+            echo "服务器上 frontend/dist 内容："
+            ls -la $PROJECT_DIR/frontend/dist
+            
+            # 后端启动（保持之前的逻辑）
+            cd $PROJECT_DIR/backend
+            if ! command -v pm2 &> /dev/null; then
+              npm install -g pm2
             fi
-            
-            # 4. 清理测试文件（可选，保持服务器整洁）
-            rm -rf $TEST_DIR
-            echo "✅ 测试完成，已清理临时文件"
+            pm2 restart app.js || pm2 start app.js
+            sudo systemctl restart caddy
