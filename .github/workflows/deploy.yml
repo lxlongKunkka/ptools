@@ -1,4 +1,4 @@
-name: 最终部署（强制使用 scp 传输）
+name: 最终部署（确保文件完整传输）
 on:
   push:
     branches: [ main ]
@@ -7,24 +7,33 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     steps:
-      - name: 拉取代码
+      # 1. 拉取代码到云端环境
+      - name: 拉取仓库代码
         uses: actions/checkout@v4
 
+      # 2. 安装 Node.js 环境
       - name: 安装 Node.js 20.19.0
         uses: actions/setup-node@v4
         with:
           node-version: 20.19.0
           cache: 'npm'
 
-      - name: 构建前端
+      # 3. 前端构建（强制生成 dist 并验证内容）
+      - name: 构建前端并验证 dist
         run: |
           cd frontend
           npm install
           npm run build
-          ls -la dist  # 确认 dist 存在
+          # 强制检查 dist 目录是否有内容（避免空构建）
+          if [ $(ls -A "dist" | wc -l) -eq 0 ]; then
+            echo "错误：dist 目录为空，构建失败"
+            exit 1
+          fi
+          echo "dist 目录内容如下（确保有文件）："
+          ls -la dist
 
-      # 清理服务器旧文件（必须步骤）
-      - name: 清理服务器旧目录
+      # 4. 清理服务器旧文件（避免残留干扰）
+      - name: 清理服务器前端/后端目录
         uses: appleboy/ssh-action@master
         with:
           host: ${{ secrets.SERVER_HOST }}
@@ -32,21 +41,29 @@ jobs:
           username: ${{ secrets.SERVER_USER }}
           key: ${{ secrets.SERVER_SSH_KEY }}
           script: |
+            # 清空前端目录（保留目录结构）
             rm -rf /var/www/programming-tools/frontend/*
+            # 清空后端目录
             rm -rf /var/www/programming-tools/backend/*
+            # 确认目录为空
+            echo "清理后前端目录内容："
+            ls -la /var/www/programming-tools/frontend
+            echo "清理后后端目录内容："
+            ls -la /var/www/programming-tools/backend
 
-      # 前端文件传输（仅用 scp-action）
-      - name: 传输前端 dist
+      # 5. 传输前端 dist 目录（含所有文件）
+      - name: 传输前端文件（完整 dist 目录）
         uses: appleboy/scp-action@master
         with:
           host: ${{ secrets.SERVER_HOST }}
           port: ${{ secrets.SERVER_PORT }}
           username: ${{ secrets.SERVER_USER }}
           key: ${{ secrets.SERVER_SSH_KEY }}
-          source: "frontend/dist/*"
-          target: "/var/www/programming-tools/frontend"
+          source: "frontend/dist"  # 传输整个 dist 目录（含内部文件）
+          target: "/var/www/programming-tools/frontend"  # 直接放到 frontend 下
+          overwrite: true  # 覆盖旧文件
 
-      # 后端文件传输（仅用 scp-action）
+      # 6. 传输后端所有文件
       - name: 传输后端文件
         uses: appleboy/scp-action@master
         with:
@@ -54,11 +71,12 @@ jobs:
           port: ${{ secrets.SERVER_PORT }}
           username: ${{ secrets.SERVER_USER }}
           key: ${{ secrets.SERVER_SSH_KEY }}
-          source: "backend/*"
-          target: "/var/www/programming-tools/backend"
+          source: "backend"  # 传输整个 backend 目录
+          target: "/var/www/programming-tools"  # 放到上级目录，避免嵌套
+          overwrite: true
 
-      # 启动服务
-      - name: 启动服务
+      # 7. 验证服务器文件是否传输成功
+      - name: 验证服务器文件
         uses: appleboy/ssh-action@master
         with:
           host: ${{ secrets.SERVER_HOST }}
@@ -66,7 +84,30 @@ jobs:
           username: ${{ secrets.SERVER_USER }}
           key: ${{ secrets.SERVER_SSH_KEY }}
           script: |
+            echo "=== 前端 dist 目录内容（必须有文件） ==="
+            ls -la /var/www/programming-tools/frontend/dist
+            echo "=== 后端目录内容（必须有 app.js） ==="
+            ls -la /var/www/programming-tools/backend
+
+      # 8. 安装后端依赖并启动服务
+      - name: 启动服务（含依赖安装）
+        uses: appleboy/ssh-action@master
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          port: ${{ secrets.SERVER_PORT }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          script: |
+            # 进入后端目录并安装依赖
             cd /var/www/programming-tools/backend
+            npm install  # 确保所有后端依赖都安装
+            # 启动/重启后端服务
             npm install -g pm2 || true
             pm2 restart app.js || pm2 start app.js
+            # 重启 Caddy 服务
             sudo systemctl restart caddy
+            # 最终状态验证
+            echo "=== 后端服务状态 ==="
+            pm2 status app.js
+            echo "=== Caddy 服务状态 ==="
+            sudo systemctl status caddy --no-pager
