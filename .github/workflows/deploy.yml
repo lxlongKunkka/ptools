@@ -1,4 +1,4 @@
-name: 部署到服务器（适配前端 package.json）
+name: 最终部署（强制使用 scp 传输）
 on:
   push:
     branches: [ main ]
@@ -6,60 +6,67 @@ on:
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    
     steps:
       - name: 拉取代码
         uses: actions/checkout@v4
 
-      - name: 安装 Node.js（匹配前端要求的版本）
+      - name: 安装 Node.js 20.19.0
         uses: actions/setup-node@v4
         with:
-          node-version: 20.19.0  # 严格匹配 package.json 中的 engines.node
+          node-version: 20.19.0
           cache: 'npm'
 
-      - name: 构建前端（适配 Vite 构建）
+      - name: 构建前端
         run: |
           cd frontend
-          npm cache clean --force
-          npm install --verbose --registry=https://registry.npmmirror.com
-          node -v  # 确认 Node 版本
-          npm run build --verbose
-          if [ ! -d "dist" ]; then
-            echo "错误：前端构建未生成 dist 文件夹"
-            exit 1
-          fi
-          ls -la dist  # 输出 dist 内容，确认构建成功
+          npm install
+          npm run build
+          ls -la dist  # 确认 dist 存在
 
-      - name: 准备后端
-        run: |
-          cd backend
-          npm install --production --verbose
-          if [ ! -f "app.js" ]; then
-            echo "错误：后端入口文件 app.js 不存在"
-            exit 1
-          fi
-
-      - name: 部署到服务器
+      # 清理服务器旧文件（必须步骤）
+      - name: 清理服务器旧目录
         uses: appleboy/ssh-action@master
         with:
           host: ${{ secrets.SERVER_HOST }}
           port: ${{ secrets.SERVER_PORT }}
           username: ${{ secrets.SERVER_USER }}
           key: ${{ secrets.SERVER_SSH_KEY }}
-          timeout: 60s
           script: |
-            PROJECT_DIR="/var/www/programming-tools"
-            mkdir -p $PROJECT_DIR/frontend $PROJECT_DIR/backend
-            
-            rm -rf $PROJECT_DIR/frontend/dist/*
-            rm -rf $PROJECT_DIR/backend/*
-            
-            cp -r /github/workspace/frontend/dist/* $PROJECT_DIR/frontend/dist/
-            cp -r /github/workspace/backend/* $PROJECT_DIR/backend/
-            
-            cd $PROJECT_DIR/backend
-            if ! command -v pm2 &> /dev/null; then
-              npm install -g pm2
-            fi
+            rm -rf /var/www/programming-tools/frontend/*
+            rm -rf /var/www/programming-tools/backend/*
+
+      # 前端文件传输（仅用 scp-action）
+      - name: 传输前端 dist
+        uses: appleboy/scp-action@master
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          port: ${{ secrets.SERVER_PORT }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          source: "frontend/dist/*"
+          target: "/var/www/programming-tools/frontend"
+
+      # 后端文件传输（仅用 scp-action）
+      - name: 传输后端文件
+        uses: appleboy/scp-action@master
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          port: ${{ secrets.SERVER_PORT }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          source: "backend/*"
+          target: "/var/www/programming-tools/backend"
+
+      # 启动服务
+      - name: 启动服务
+        uses: appleboy/ssh-action@master
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          port: ${{ secrets.SERVER_PORT }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          script: |
+            cd /var/www/programming-tools/backend
+            npm install -g pm2 || true
             pm2 restart app.js || pm2 start app.js
             sudo systemctl restart caddy
