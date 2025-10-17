@@ -1,4 +1,4 @@
-name: 部署（改用 scp 传输文件）
+name: 部署（修复目录嵌套问题）
 on:
   push:
     branches: [ main ]
@@ -20,25 +20,19 @@ jobs:
           cd frontend
           npm install
           npm run build
-          ls -la dist  # 确认 dist 存在
 
-      - name: 确认后端文件
-        run: |
-          cd backend
-          ls -la app.js  # 确认 app.js 存在
-
-      # 第一步：用 scp 将前端 dist 传到服务器
+      # 修正1：前端文件传输，source 用 frontend/dist/*（传输 dist 内的所有文件）
       - name: 传输前端文件到服务器
-        uses: appleboy/scp-action@master  # 专门用于文件传输的 Action
+        uses: appleboy/scp-action@master
         with:
           host: ${{ secrets.SERVER_HOST }}
           port: ${{ secrets.SERVER_PORT }}
           username: ${{ secrets.SERVER_USER }}
           key: ${{ secrets.SERVER_SSH_KEY }}
-          source: "frontend/dist"  # GitHub Actions 本地的源路径（相对路径）
-          target: "/var/www/programming-tools/frontend"  # 服务器目标路径
+          source: "frontend/dist/*"  # 关键：只传 dist 里的内容，不包含 dist 目录本身
+          target: "/var/www/programming-tools/frontend"  # 文件直接放到这个目录下
 
-      # 第二步：用 scp 将后端文件传到服务器
+      # 修正2：后端文件传输，确保不嵌套（如果后端也有嵌套，同样改 source 为 backend/*）
       - name: 传输后端文件到服务器
         uses: appleboy/scp-action@master
         with:
@@ -46,10 +40,9 @@ jobs:
           port: ${{ secrets.SERVER_PORT }}
           username: ${{ secrets.SERVER_USER }}
           key: ${{ secrets.SERVER_SSH_KEY }}
-          source: "backend/*"  # 后端所有文件
+          source: "backend/*"  # 后端所有文件直接传到 target
           target: "/var/www/programming-tools/backend"
 
-      # 第三步：通过 ssh 执行启动命令
       - name: 启动服务器服务
         uses: appleboy/ssh-action@master
         with:
@@ -58,6 +51,10 @@ jobs:
           username: ${{ secrets.SERVER_USER }}
           key: ${{ secrets.SERVER_SSH_KEY }}
           script: |
+            # 先清理服务器上旧的嵌套目录（避免残留）
+            rm -rf /var/www/programming-tools/frontend/frontend
+            
+            # 启动服务
             cd /var/www/programming-tools/backend
             npm install -g pm2 || true
             pm2 restart app.js || pm2 start app.js
