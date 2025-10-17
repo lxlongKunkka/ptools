@@ -19,14 +19,14 @@ jobs:
       # 构建前端（目录为 frontend）
       - name: 构建前端
         run: |
-          cd frontend
+          cd ptools/frontend
           npm install
           npm run build  # 确保此命令生成 dist 文件夹
 
       # 准备后端（目录为 backend）
       - name: 准备后端
         run: |
-          cd backend
+          cd ptools/backend
           npm install --production
 
       - name: 部署到服务器
