@@ -1,4 +1,4 @@
-name: 部署到服务器（最终修正版）
+name: 部署到服务器（最终正确版）
 on:
   push:
     branches: [ main ]
@@ -16,17 +16,17 @@ jobs:
         with:
           node-version: 20.x
 
-      # 构建前端（目录为 frontend）
+      # 前端构建：路径为 frontend，确保 build 后生成 dist
       - name: 构建前端
         run: |
-          cd ptools/frontend
+          cd frontend
           npm install
-          npm run build  # 确保此命令生成 dist 文件夹
+          npm run build
 
-      # 准备后端（目录为 backend）
+      # 后端准备：路径为 backend，安装生产依赖
       - name: 准备后端
         run: |
-          cd ptools/backend
+          cd backend
           npm install --production
 
       - name: 部署到服务器
@@ -44,13 +44,13 @@ jobs:
             rm -rf $PROJECT_DIR/frontend/dist
             rm -rf $PROJECT_DIR/backend/*
             
-            # 复制新文件
+            # 复制新文件（路径完全匹配）
             cp -r /github/workspace/frontend/dist $PROJECT_DIR/frontend/
             cp -r /github/workspace/backend/* $PROJECT_DIR/backend/
             
             # 启动后端（确认入口文件是 app.js）
             cd $PROJECT_DIR/backend
             npm install -g pm2
-            pm2 restart app.js || pm2 start app.js
+            pm2 restart app.js || pm2 start app.js  # 若入口是 server.js，替换为 server.js
             
             sudo systemctl restart caddy
