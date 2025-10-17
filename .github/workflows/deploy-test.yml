@@ -1,49 +1,39 @@
-name: 部署（修复目录嵌套问题）
+name: 最终部署（无目录嵌套）
 on:
   push:
-    branches: [ main ]
+    branches: [ main ]  # 推送 main 分支触发部署
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
     steps:
-      - name: 拉取代码
+      # 1. 拉取 GitHub 仓库代码到云端环境
+      - name: 拉取仓库代码
         uses: actions/checkout@v4
 
-      - name: 安装 Node.js
+      # 2. 安装匹配的 Node.js 环境（与前端 package.json 要求一致）
+      - name: 安装 Node.js 20.19.0
         uses: actions/setup-node@v4
         with:
           node-version: 20.19.0
+          cache: 'npm'  # 缓存依赖，加速安装
 
+      # 3. 前端构建（生成 dist 目录，与本地逻辑一致）
       - name: 构建前端
         run: |
           cd frontend
-          npm install
-          npm run build
+          npm install  # 安装前端依赖
+          npm run build  # 执行 Vite 构建
+          # 确认 dist 目录存在，避免空构建
+          if [ ! -d "dist" ]; then
+            echo "错误：前端构建未生成 dist 目录"
+            exit 1
+          fi
+          echo "前端构建完成，dist 目录内容："
+          ls -la dist  # 打印 dist 内容，方便日志排查
 
-      # 修正1：前端文件传输，source 用 frontend/dist/*（传输 dist 内的所有文件）
-      - name: 传输前端文件到服务器
-        uses: appleboy/scp-action@master
-        with:
-          host: ${{ secrets.SERVER_HOST }}
-          port: ${{ secrets.SERVER_PORT }}
-          username: ${{ secrets.SERVER_USER }}
-          key: ${{ secrets.SERVER_SSH_KEY }}
-          source: "frontend/dist/*"  # 关键：只传 dist 里的内容，不包含 dist 目录本身
-          target: "/var/www/programming-tools/frontend"  # 文件直接放到这个目录下
-
-      # 修正2：后端文件传输，确保不嵌套（如果后端也有嵌套，同样改 source 为 backend/*）
-      - name: 传输后端文件到服务器
-        uses: appleboy/scp-action@master
-        with:
-          host: ${{ secrets.SERVER_HOST }}
-          port: ${{ secrets.SERVER_PORT }}
-          username: ${{ secrets.SERVER_USER }}
-          key: ${{ secrets.SERVER_SSH_KEY }}
-          source: "backend/*"  # 后端所有文件直接传到 target
-          target: "/var/www/programming-tools/backend"
-
-      - name: 启动服务器服务
+      # 4. 清理服务器旧嵌套目录（避免历史残留导致路径混乱）
+      - name: 清理服务器旧目录
         uses: appleboy/ssh-action@master
         with:
           host: ${{ secrets.SERVER_HOST }}
@@ -51,11 +41,72 @@ jobs:
           username: ${{ secrets.SERVER_USER }}
           key: ${{ secrets.SERVER_SSH_KEY }}
           script: |
-            # 先清理服务器上旧的嵌套目录（避免残留）
+            # 清理前端可能的嵌套目录
             rm -rf /var/www/programming-tools/frontend/frontend
-            
-            # 启动服务
+            # 清理后端可能的嵌套目录
+            rm -rf /var/www/programming-tools/backend/backend
+            # 确保目标目录存在
+            mkdir -p /var/www/programming-tools/frontend /var/www/programming-tools/backend
+
+      # 5. 传输前端 dist 目录到服务器（无嵌套）
+      - name: 传输前端文件
+        uses: appleboy/scp-action@master
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          port: ${{ secrets.SERVER_PORT }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SSH_KEY }}
+          source: "frontend/dist"  # 云端源路径：前端构建好的 dist 目录
+          target: "/var/www/programming-tools/frontend"  # 服务器目标路径：直接放到 frontend 下
+          overwrite: true  # 覆盖旧文件，确保是最新版本
+
+      # 6. 传输后端目录到服务器（无嵌套）
+      - name: 传输后端文件
+        uses: appleboy/scp-action@master
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          port: ${{ secrets.SERVER_PORT }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SSH_KEY }}
+          source: "backend"  # 云端源路径：整个 backend 目录
+          target: "/var/www/programming-tools"  # 服务器目标路径：放到上级目录，避免嵌套
+          overwrite: true  # 覆盖旧文件
+
+      # 7. 验证服务器目录结构（确保无嵌套，方便排查）
+      - name: 验证服务器目录
+        uses: appleboy/ssh-action@master
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          port: ${{ secrets.SERVER_PORT }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SSH_KEY }}
+          script: |
+            echo "=== 服务器前端目录结构 ==="
+            ls -la /var/www/programming-tools/frontend  # 应直接显示 dist 目录
+            echo "=== 服务器后端目录结构 ==="
+            ls -la /var/www/programming-tools/backend  # 应直接显示 app.js、routes 等
+
+      # 8. 启动/重启服务器服务
+      - name: 启动后端与 Caddy 服务
+        uses: appleboy/ssh-action@master
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          port: ${{ secrets.SERVER_PORT }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SSH_KEY }}
+          script: |
+            # 进入后端目录
             cd /var/www/programming-tools/backend
-            npm install -g pm2 || true
+            # 安装 pm2（若未安装）
+            if ! command -v pm2 &> /dev/null; then
+              npm install -g pm2
+            fi
+            # 重启后端服务（确保用最新代码）
             pm2 restart app.js || pm2 start app.js
+            # 重启 Caddy（使前端静态文件生效）
             sudo systemctl restart caddy
+            # 验证服务状态
+            echo "=== 后端服务状态 ==="
+            pm2 status app.js
+            echo "=== Caddy 服务状态 ==="
+            sudo systemctl status caddy --no-pager
