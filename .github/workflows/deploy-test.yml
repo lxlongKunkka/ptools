@@ -1,0 +1,47 @@
+name: 测试服务器部署链路
+on:
+  push:
+    branches: [ main ]  # 推送 main 分支时触发
+
+jobs:
+  test-deploy:
+    runs-on: ubuntu-latest
+    
+    steps:
+      # 仅拉取代码（无需构建，跳过前端/后端处理）
+      - name: 拉取仓库代码
+        uses: actions/checkout@v4
+
+      # 核心步骤：通过 SSH 连接服务器并执行简单命令
+      - name: 测试服务器连接与基础操作
+        uses: appleboy/ssh-action@master
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          port: ${{ secrets.SERVER_PORT }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          timeout: 30s
+          
+          # 执行的测试命令（简单且可验证）
+          script: |
+            # 1. 打印服务器信息（验证连接成功）
+            echo "✅ 成功连接服务器：$(hostname)"
+            echo "当前服务器时间：$(date)"
+            
+            # 2. 创建测试目录和文件（验证读写权限）
+            TEST_DIR="/var/www/test-deploy"
+            mkdir -p $TEST_DIR
+            echo "这是来自 GitHub Actions 的测试文件" > $TEST_DIR/test.txt
+            
+            # 3. 验证文件是否创建成功
+            if [ -f "$TEST_DIR/test.txt" ]; then
+              echo "✅ 测试文件创建成功，内容："
+              cat $TEST_DIR/test.txt
+            else
+              echo "❌ 测试文件创建失败"
+              exit 1
+            fi
+            
+            # 4. 清理测试文件（可选，保持服务器整洁）
+            rm -rf $TEST_DIR
+            echo "✅ 测试完成，已清理临时文件"
