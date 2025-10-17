@@ -1,4 +1,4 @@
-name: 部署到服务器（最终正确版）
+name: 部署到服务器（适配前端 package.json）
 on:
   push:
     branches: [ main ]
@@ -11,23 +11,33 @@ jobs:
       - name: 拉取代码
         uses: actions/checkout@v4
 
-      - name: 安装 Node.js
+      - name: 安装 Node.js（匹配前端要求的版本）
         uses: actions/setup-node@v4
         with:
-          node-version: 20.x
+          node-version: 20.19.0  # 严格匹配 package.json 中的 engines.node
+          cache: 'npm'
 
-      # 前端构建：路径为 frontend，确保 build 后生成 dist
-      - name: 构建前端
+      - name: 构建前端（适配 Vite 构建）
         run: |
           cd frontend
-          npm install
-          npm run build
+          npm cache clean --force
+          npm install --verbose --registry=https://registry.npmmirror.com
+          node -v  # 确认 Node 版本
+          npm run build --verbose
+          if [ ! -d "dist" ]; then
+            echo "错误：前端构建未生成 dist 文件夹"
+            exit 1
+          fi
+          ls -la dist  # 输出 dist 内容，确认构建成功
 
-      # 后端准备：路径为 backend，安装生产依赖
       - name: 准备后端
         run: |
           cd backend
-          npm install --production
+          npm install --production --verbose
+          if [ ! -f "app.js" ]; then
+            echo "错误：后端入口文件 app.js 不存在"
+            exit 1
+          fi
 
       - name: 部署到服务器
         uses: appleboy/ssh-action@master
@@ -36,21 +46,20 @@ jobs:
           port: ${{ secrets.SERVER_PORT }}
           username: ${{ secrets.SERVER_USER }}
           key: ${{ secrets.SERVER_SSH_KEY }}
+          timeout: 60s
           script: |
             PROJECT_DIR="/var/www/programming-tools"
             mkdir -p $PROJECT_DIR/frontend $PROJECT_DIR/backend
             
-            # 清理旧文件
-            rm -rf $PROJECT_DIR/frontend/dist
+            rm -rf $PROJECT_DIR/frontend/dist/*
             rm -rf $PROJECT_DIR/backend/*
             
-            # 复制新文件（路径完全匹配）
-            cp -r /github/workspace/frontend/dist $PROJECT_DIR/frontend/
+            cp -r /github/workspace/frontend/dist/* $PROJECT_DIR/frontend/dist/
             cp -r /github/workspace/backend/* $PROJECT_DIR/backend/
             
-            # 启动后端（确认入口文件是 app.js）
             cd $PROJECT_DIR/backend
-            npm install -g pm2
-            pm2 restart app.js || pm2 start app.js  # 若入口是 server.js，替换为 server.js
-            
+            if ! command -v pm2 &> /dev/null; then
+              npm install -g pm2
+            fi
+            pm2 restart app.js || pm2 start app.js
             sudo systemctl restart caddy
