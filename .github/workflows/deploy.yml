@@ -1,37 +1,35 @@
 name: 部署到服务器（Caddy 反向代理）
 on:
   push:
-    branches: [ main ]  # 推送 main 分支时触发部署
+    branches: [ main ]
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
     
     steps:
-      # 拉取仓库代码
+      # 拉取代码：GitHub Actions 会自动把仓库拉到 /github/workspace（对应你 Codespace 的 /workspaces/ptools）
       - name: 拉取代码
         uses: actions/checkout@v4
 
-      # 安装 Node.js 环境
       - name: 安装 Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20.x  # 与你的项目 Node 版本一致
+          node-version: 20.x
 
-      # 构建前端项目（生成静态文件）
+      # 关键：构建前端——路径与你 Codespace 一致，都是仓库根目录下的 frontend
       - name: 构建前端
         run: |
-          cd frontend
+          cd /github/workspace/frontend  # 明确指定路径，避免歧义（等同于你 Codespace 的 /workspaces/ptools/frontend）
           npm install
-          npm run build  # 生成 dist 文件夹
+          npm run build  # 确保执行后会生成 dist 文件夹
 
-      # 安装后端生产依赖
+      # 关键：准备后端——路径与你 Codespace 一致
       - name: 准备后端
         run: |
-          cd backend
-          npm install --production  # 只安装生产依赖
+          cd /github/workspace/backend  # 等同于你 Codespace 的 /workspaces/ptools/backend
+          npm install --production
 
-      # 通过 SSH 部署到服务器
       - name: 部署到服务器
         uses: appleboy/ssh-action@master
         with:
@@ -39,27 +37,24 @@ jobs:
           port: ${{ secrets.SERVER_PORT }}
           username: ${{ secrets.SERVER_USER }}
           key: ${{ secrets.SERVER_SSH_KEY }}
-          
-          # 部署脚本（根据服务器实际路径修改）
           script: |
-            # 服务器项目根目录（提前创建好）
             PROJECT_DIR="/var/www/programming-tools"
-            
-            # 创建目录（如果不存在）
+            # 确保服务器目录存在
             mkdir -p $PROJECT_DIR/frontend $PROJECT_DIR/backend
             
             # 清理旧文件
             rm -rf $PROJECT_DIR/frontend/dist
             rm -rf $PROJECT_DIR/backend/*
             
-            # 复制新文件到服务器（从 GitHub Actions 工作目录）
+            # 复制文件：路径与 GitHub Actions 拉取的代码路径一致（/github/workspace 对应你 Codespace 的 /workspaces/ptools）
             cp -r /github/workspace/frontend/dist $PROJECT_DIR/frontend/
             cp -r /github/workspace/backend/* $PROJECT_DIR/backend/
             
-            # 重启后端服务（使用 pm2 管理）
+            # 启动后端：先确认入口文件
             cd $PROJECT_DIR/backend
-            npm install -g pm2  # 确保 pm2 已安装
-            pm2 restart app.js || pm2 start app.js  # 重启或启动服务
+            npm install -g pm2
+            # 关键：确认后端入口文件是 app.js（若不是，替换成 server.js 等实际名称）
+            pm2 restart app.js || pm2 start app.js
             
-            # 重启 Caddy（使配置生效）
+            # 重启 Caddy
             sudo systemctl restart caddy
