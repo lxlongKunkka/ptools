@@ -1,4 +1,4 @@
-name: 最终部署（修复路径映射）
+name: 部署（改用 scp 传输文件）
 on:
   push:
     branches: [ main ]
@@ -10,48 +10,55 @@ jobs:
       - name: 拉取代码
         uses: actions/checkout@v4
 
-      - name: 安装 Node.js 20.19.0
+      - name: 安装 Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 20.19.0
-          cache: 'npm'
 
       - name: 构建前端
         run: |
           cd frontend
           npm install
           npm run build
-          ls -la dist
+          ls -la dist  # 确认 dist 存在
 
-      - name: 确认后端目录
+      - name: 确认后端文件
         run: |
           cd backend
-          ls -la
+          ls -la app.js  # 确认 app.js 存在
 
-      - name: 部署到服务器（使用相对路径）
+      # 第一步：用 scp 将前端 dist 传到服务器
+      - name: 传输前端文件到服务器
+        uses: appleboy/scp-action@master  # 专门用于文件传输的 Action
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          port: ${{ secrets.SERVER_PORT }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          source: "frontend/dist"  # GitHub Actions 本地的源路径（相对路径）
+          target: "/var/www/programming-tools/frontend"  # 服务器目标路径
+
+      # 第二步：用 scp 将后端文件传到服务器
+      - name: 传输后端文件到服务器
+        uses: appleboy/scp-action@master
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          port: ${{ secrets.SERVER_PORT }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          source: "backend/*"  # 后端所有文件
+          target: "/var/www/programming-tools/backend"
+
+      # 第三步：通过 ssh 执行启动命令
+      - name: 启动服务器服务
         uses: appleboy/ssh-action@master
         with:
           host: ${{ secrets.SERVER_HOST }}
           port: ${{ secrets.SERVER_PORT }}
           username: ${{ secrets.SERVER_USER }}
           key: ${{ secrets.SERVER_SSH_KEY }}
-          timeout: 60s
           script: |
-            PROJECT_DIR="/var/www/programming-tools"
-            mkdir -p $PROJECT_DIR/frontend $PROJECT_DIR/backend
-            
-            # 核心：用相对路径复制文件
-            cp -r frontend/dist $PROJECT_DIR/frontend/
-            cp -r backend/* $PROJECT_DIR/backend/
-            
-            # 验证文件是否复制成功
-            echo "服务器 frontend/dist 内容："
-            ls -la $PROJECT_DIR/frontend/dist
-            echo "服务器 backend 内容："
-            ls -la $PROJECT_DIR/backend
-            
-            # 启动服务
-            cd $PROJECT_DIR/backend
+            cd /var/www/programming-tools/backend
             npm install -g pm2 || true
             pm2 restart app.js || pm2 start app.js
             sudo systemctl restart caddy
