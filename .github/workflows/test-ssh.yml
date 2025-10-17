@@ -1,0 +1,17 @@
+name: 测试SSH连接
+on:
+  push:
+    branches: [main]  # 推送main分支时触发
+
+jobs:
+  test-ssh:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 尝试连接服务器
+        uses: appleboy/ssh-action@master
+        with:
+          host: ${{ secrets.SERVER_HOST }}    # 服务器IP
+          port: ${{ secrets.SERVER_PORT }}    # 端口（默认22）
+          username: ${{ secrets.SERVER_USER }} # 用户名（root）
+          key: ${{ secrets.SERVER_SSH_KEY }}   # SSH私钥
+          script: echo "连接成功！当前时间：$(date)"  # 连接成功后执行的命令
