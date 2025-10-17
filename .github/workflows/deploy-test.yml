@@ -1,4 +1,4 @@
-name: 完整部署（基于本地成功构建逻辑）
+name: 最终部署（修复路径映射）
 on:
   push:
     branches: [ main ]
@@ -7,41 +7,28 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     steps:
-      # 1. 拉取代码（确保拿到最新的 frontend 代码）
-      - name: 拉取仓库代码
+      - name: 拉取代码
         uses: actions/checkout@v4
 
-      # 2. 安装 Node.js（和你本地 Codespace 版本尽量一致，避免版本差异）
       - name: 安装 Node.js 20.19.0
         uses: actions/setup-node@v4
         with:
-          node-version: 20.19.0  # 匹配你 package.json 要求的版本
-          cache: 'npm'           # 缓存依赖，和本地一样快
+          node-version: 20.19.0
+          cache: 'npm'
 
-      # 3. 前端构建（完全复刻你本地的操作，不额外加复杂命令）
-      - name: 构建前端（复刻本地成功逻辑）
+      - name: 构建前端
         run: |
           cd frontend
-          # 先看当前目录内容，确认 package.json 存在（排查路径问题）
-          ls -la
-          # 安装依赖（和本地一样用默认命令，不加多余参数）
           npm install
-          # 执行构建（和你本地敲的命令完全一致）
           npm run build
-          # 构建后查看 dist 是否存在（输出日志，方便排查）
-          echo "构建后 frontend 目录内容："
-          ls -la
-          echo "dist 目录内容："
           ls -la dist
 
-      # 4. 后端仅复制文件（暂不处理依赖，先确保文件能传过去）
       - name: 确认后端目录
         run: |
           cd backend
-          ls -la  # 确认 app.js 存在，输出日志
+          ls -la
 
-      # 5. 部署到服务器（和之前测试成功的 SSH 逻辑一致）
-      - name: 部署到服务器
+      - name: 部署到服务器（使用相对路径）
         uses: appleboy/ssh-action@master
         with:
           host: ${{ secrets.SERVER_HOST }}
@@ -51,22 +38,20 @@ jobs:
           timeout: 60s
           script: |
             PROJECT_DIR="/var/www/programming-tools"
-            # 创建目录（确保服务器有这个文件夹）
             mkdir -p $PROJECT_DIR/frontend $PROJECT_DIR/backend
             
-            # 复制前端 dist（从 GitHub Actions 工作目录复制，和本地路径对应）
-            cp -r /github/workspace/frontend/dist $PROJECT_DIR/frontend/
-            # 复制后端文件
-            cp -r /github/workspace/backend/* $PROJECT_DIR/backend/
+            # 核心：用相对路径复制文件
+            cp -r frontend/dist $PROJECT_DIR/frontend/
+            cp -r backend/* $PROJECT_DIR/backend/
             
-            # 简单验证：查看服务器上的 dist 是否存在
-            echo "服务器上 frontend/dist 内容："
+            # 验证文件是否复制成功
+            echo "服务器 frontend/dist 内容："
             ls -la $PROJECT_DIR/frontend/dist
+            echo "服务器 backend 内容："
+            ls -la $PROJECT_DIR/backend
             
-            # 后端启动（保持之前的逻辑）
+            # 启动服务
             cd $PROJECT_DIR/backend
-            if ! command -v pm2 &> /dev/null; then
-              npm install -g pm2
-            fi
+            npm install -g pm2 || true
             pm2 restart app.js || pm2 start app.js
             sudo systemctl restart caddy
